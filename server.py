@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
 import numpy as np
 import cv2
 import time
@@ -8,6 +11,7 @@ from ultralytics import YOLO
 from datetime import datetime
 import csv
 import os
+
 
 app = FastAPI()
 
@@ -141,12 +145,13 @@ async def predict_snapshot():
     if cap is None:
         return {"error": "Camera not initialized. Open /frame first."}
 
-    ret, frame = cap.read()
-    if not ret:
+    frame = _read_frame()
+    if frame is None:
         return {"error": "Failed to capture frame"}
 
     result = model(frame)[0]
 
+    # If no detection found
     if len(result.boxes) == 0:
         _write_log("no_object_detected", None)
         return {
@@ -155,17 +160,97 @@ async def predict_snapshot():
             "status": "UNDEFINED"
         }
 
+    # Extract model output
     cls_id = int(result.boxes.cls[0])
     conf = float(result.boxes.conf[0])
     label = result.names[cls_id]
 
-    status = "PASS" if label == "Cap_On" else "REJECT"
+    # Flexible rule (scalable)
+    PASS_LABELS = ["Cap_On"]  # <-- tinggal tambahin label lain kalau sistem berkembang
 
-    # log prediction
-    _write_log(label, round(conf, 3))
+    status = "PASS" if label in PASS_LABELS else "REJECT"
+
+    # Write log
+    confidence_rounded = round(conf, 3)
+    _write_log(label, confidence_rounded)
 
     return {
         "prediction": label,
-        "confidence": round(conf, 3),
+        "confidence": confidence_rounded,
         "status": status
     }
+
+# ================= /REPORT =================
+@app.post("/report")
+def generate_report():
+
+    if not os.path.exists(LOG_FILE):
+        return {"error": "No scan data found. Scan first before generating report."}
+
+    # Read CSV data
+    rows = []
+    with open(LOG_FILE, "r") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    if len(rows) == 0:
+        return {"error": "Log file empty"}
+
+    # Calculate stats
+    total = len(rows)
+    good = sum(1 for r in rows if r["prediction"] == "Cap_On")
+    defects = total - good
+    success_rate = round((good / total) * 100, 2)
+    error_rate = round((defects / total) * 100, 2)
+
+    # Prepare rejected item list
+    rejected_rows = [r for r in rows if r["prediction"] != "Cap_On"]
+
+    # PDF generate
+    filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    c = canvas.Canvas(filename, pagesize=A4)
+
+    # ===== HEADER PAGE =====
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(150, 800, "FUMAKILA Bottle Inspection Report")
+
+    c.setFont("Helvetica", 12)
+    c.drawString(50, 760, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Overview Table
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(50, 720, "Summary")
+
+    c.setFont("Helvetica", 12)
+    c.drawString(50, 690, f"Total Bottles: {total}")
+    c.drawString(50, 670, f"Total Good: {good}")
+    c.drawString(50, 650, f"Total Defects: {defects}")
+    c.drawString(50, 630, f"Success Rate: {success_rate}%")
+    c.drawString(50, 610, f"Error Rate: {error_rate}%")
+
+    c.showPage()
+
+    # ===== REJECTED DETAILS =====
+    if len(rejected_rows) > 0:
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(180, 800, "Defective Items Report")
+
+        y = 760
+        for idx, row in enumerate(rejected_rows, start=1):
+
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(50, y, f"#{idx} — Prediction: {row['prediction']} | Confidence: {row['confidence']}")
+            y -= 20
+
+            # (Optional: If later you save images, draw them here)
+            if y < 100:
+                c.showPage()
+                y = 780
+
+    else:
+        c.setFont("Helvetica", 14)
+        c.drawString(200, 700, "✨ No Defects Detected ✨")
+
+    c.save()
+
+    return FileResponse(filename, media_type="application/pdf", filename=filename)

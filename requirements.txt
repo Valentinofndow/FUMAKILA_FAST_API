@@ -7,3 +7,4 @@ ultralytics
 numpy
 opencv-python
 python-multipart
+reportlab
