@@ -1,0 +1,9 @@
+# Requirements for Bottle Detection API
+# Python version tested: 3.10+
+
+fastapi
+uvicorn[standard]
+ultralytics
+numpy
+opencv-python
+python-multipart

@@ -1,0 +1,14 @@
+# Python junk
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+
+# System files
+.DS_Store
+
+# Secrets (kalau nanti pakai)
+.env
