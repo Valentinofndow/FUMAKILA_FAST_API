@@ -19,9 +19,9 @@ LOG_FILE = "logs.csv"
 # ======== Load Model Sekali ========
 try:
     model = YOLO("model/runs/detect/train/weights/best.pt")
-    print("✅ Model loaded successfully.")
+    print("Model loaded successfully.")
 except Exception as e:
-    print("❌ ERROR loading model:", e)
+    print("ERROR loading model:", e)
     model = None
 
 
