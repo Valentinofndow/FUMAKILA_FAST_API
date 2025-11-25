@@ -249,7 +249,7 @@ def generate_report():
 
     else:
         c.setFont("Helvetica", 14)
-        c.drawString(200, 700, "✨ No Defects Detected ✨")
+        c.drawString(200, 700, "No Defects Detected")
 
     c.save()
 
