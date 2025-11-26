@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -15,6 +16,18 @@ import threading
 
 app = FastAPI()
 
+origins = [
+    "*"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # ======== Global State ========
 cap = None
 camera_active = False
@@ -27,6 +40,8 @@ total_scanned = 0
 total_good = 0
 total_defect = 0
 
+# Label yang dianggap GOOD
+PASS_LABELS = ["Cap_On"]
 
 # ======== Load Config (PASS LABELS) ========
 def _load_config():
@@ -98,7 +113,7 @@ def _init_camera():
 
     if cap is None:
         print("🎥 Initializing camera...")
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         camera_active = True
@@ -123,6 +138,10 @@ def _format_stream_chunk(jpeg_bytes):
         b"\r\n"
     )
 
+# ==========================================
+@app.get("/")
+async def main():
+    return {"message": "Hello World"}
 
 # ================= /HEALTH =================
 @app.get("/health")
@@ -165,16 +184,15 @@ async def stream_camera():
 
 
 # ================= /STOP =================
-@app.get("/stop")
-async def stop_camera():
-    global cap, camera_active
-
-    camera_active = False
-    if cap is not None:
-        cap.release()
-        cap = None
-
-    return {"status": "camera stopped"}
+@app.get("/stop") 
+async def stop_camera(): 
+    global cap, camera_active 
+    
+    camera_active = False 
+    if cap is not None: 
+        cap.release() 
+        cap = None 
+        return {"status": "camera stopped"}
 
 
 # ================= /PREDICT =================
@@ -192,10 +210,10 @@ async def predict_snapshot():
     result = model(frame)[0]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # No detection
+    # =======================
+    # CASE 1: NO DETECTION (UNDEFINED)
+    # =======================
     if len(result.boxes) == 0:
-        total_scanned += 1
-        total_defect += 1
         _write_log("no_object_detected", None)
 
         return {
@@ -208,20 +226,25 @@ async def predict_snapshot():
             "total_defect": total_defect
         }
 
-    # Extract detection
+    # =======================
+    # CASE 2: ADA DETEKSI
+    # =======================
     cls_id = int(result.boxes.cls[0])
     conf = float(result.boxes.conf[0])
     label = result.names[cls_id]
     confidence_rounded = round(conf, 3)
 
-    status = "PASS" if label in PASS_LABELS else "REJECT"
-
+    # Update counters
     total_scanned += 1
-    if status == "PASS":
+
+    if label in PASS_LABELS:
+        status = "PASS"
         total_good += 1
     else:
+        status = "REJECT"
         total_defect += 1
 
+    # Tulis CSV
     _write_log(label, confidence_rounded)
 
     return {
@@ -232,6 +255,48 @@ async def predict_snapshot():
         "total_scanned": total_scanned,
         "total_good": total_good,
         "total_defect": total_defect
+    }
+
+
+# ================= /RESULT =================
+@app.get("/result")
+async def get_result():
+    if total_scanned == 0:
+        success_rate = 0
+        error_rate = 0
+    else:
+        success_rate = round((total_good / total_scanned) * 100, 2)
+        error_rate = round((total_defect / total_scanned) * 100, 2)
+
+    return {
+        "total_scanned": total_scanned,
+        "total_good": total_good,
+        "total_defect": total_defect,
+        "success_rate": success_rate,
+        "error_rate": error_rate,
+        "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+
+# ================= /RESET =================
+@app.get("/reset")
+async def reset_data():
+    global total_scanned, total_good, total_defect
+
+    total_scanned = 0
+    total_good = 0
+    total_defect = 0
+
+    if os.path.exists(LOG_FILE):
+        os.remove(LOG_FILE)
+
+    with open(LOG_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "prediction", "confidence"])
+
+    return {
+        "status": "reset_success",
+        "message": "All counters and logs have been reset."
     }
 
 
